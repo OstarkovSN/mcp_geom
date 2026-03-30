@@ -453,3 +453,58 @@ def set_dihedral_fragment(
         atom_i, atom_j, atom_k, atom_l, new_dihedral_deg, current_dihedral,
     )
     return result
+
+
+def get_center_of_mass(atoms: Atoms) -> np.ndarray:
+    """
+    Return the center of mass of the molecule as a numpy array.
+
+    Args:
+        atoms: ASE Atoms object
+
+    Returns:
+        Center of mass coordinates as np.ndarray of shape (3,) in Angstroms.
+    """
+    return atoms.get_center_of_mass()
+
+
+def translate_to_origin(atoms: Atoms) -> Atoms:
+    """
+    Return a new Atoms object with the center of mass moved to the origin.
+
+    Args:
+        atoms: ASE Atoms object
+
+    Returns:
+        New Atoms object centered at [0, 0, 0].
+    """
+    result = atoms.copy()
+    result.positions -= get_center_of_mass(atoms)
+    return result
+
+
+def rotate_molecule(atoms: Atoms, axis: list[float], angle_deg: float) -> Atoms:
+    """
+    Rotate the entire molecule around a given axis passing through the center of mass.
+
+    Args:
+        atoms: ASE Atoms object
+        axis: list[float] of length 3 — rotation axis vector (will be normalized)
+        angle_deg: rotation angle in degrees
+
+    Returns:
+        New Atoms object with all atoms rotated.
+    """
+    result = atoms.copy()
+    com = get_center_of_mass(atoms)
+    ax = np.array(axis, dtype=float)
+    ax_norm = np.linalg.norm(ax)
+    if ax_norm < 1e-10:
+        raise ValueError("Rotation axis cannot be the zero vector")
+    ax = ax / ax_norm
+    angle_rad = np.radians(angle_deg)
+    for i in range(len(result)):
+        vec = result.positions[i] - com
+        result.positions[i] = com + _rodrigues(vec, ax, angle_rad)
+    logger.info("Rotated molecule by %.2f° around axis %s", angle_deg, axis)
+    return result

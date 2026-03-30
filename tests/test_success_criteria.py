@@ -222,3 +222,32 @@ async def test_change_dihedral_fragment(server_params, ethane_xyz):
             assert abs(new_dist - orig_dist) < 0.01, (
                 f"Fragment distance {a}-{b} changed: {orig_dist:.4f} → {new_dist:.4f}"
             )
+
+
+@pytest.mark.asyncio
+async def test_change_bond_angle_fragment(server_params, ethane_xyz):
+    """Rotate the whole CH3 fragment via change_bond_angle_fragment,
+    verify angle is correct AND internal fragment geometry is preserved."""
+    async with mcp_test_session(server_params, ethane_xyz) as (session, openai_tools, tool_names, client):
+        initial_atoms = atoms_from_xyz((await session.call_tool("get_molecule", {})).content[0].text)
+        frag = [1, 5, 6, 7]
+        initial_dists = {
+            (a, b): float(np.linalg.norm(initial_atoms.positions[a] - initial_atoms.positions[b]))
+            for a in frag for b in frag if a < b
+        }
+
+        final_xyz = await run_agentic_loop(
+            session, client, openai_tools, tool_names,
+            "Use the fragment bond angle tool to set the H-C-C angle "
+            "(atoms 2, 0, 1) to 105 degrees, rotating the entire CH3 group on the C1 side."
+        )
+
+        final_atoms = atoms_from_xyz(final_xyz)
+        angle = get_bond_angle(final_atoms, 2, 0, 1)
+        assert abs(angle - 105.0) < 1.0, f"Expected ~105°, got {angle:.4f}°"
+
+        for (a, b), orig_dist in initial_dists.items():
+            new_dist = float(np.linalg.norm(final_atoms.positions[a] - final_atoms.positions[b]))
+            assert abs(new_dist - orig_dist) < 0.01, (
+                f"Fragment distance {a}-{b} changed: {orig_dist:.4f} → {new_dist:.4f}"
+            )

@@ -20,6 +20,9 @@ from geometry_tools import (
     detect_fragment,
     rotate_dihedral_fragment,
     set_dihedral_fragment,
+    get_center_of_mass,
+    translate_to_origin,
+    rotate_molecule,
 )
 
 # ─────────────────────────────────────────────
@@ -393,3 +396,50 @@ def test_set_bond_angle_fragment_does_not_mutate(ethane):
     fragment = detect_fragment(ethane, 0, 1, 1)
     set_bond_angle_fragment(ethane, 2, 0, 1, 115.0, fragment)
     np.testing.assert_allclose(ethane.positions, original)
+
+
+# ─────────────────────────────────────────────
+# Tests: center of mass, translate to origin, rotate molecule
+# ─────────────────────────────────────────────
+
+def test_get_center_of_mass_single_atom():
+    atoms = Atoms("H", positions=[[1.0, 2.0, 3.0]])
+    com = get_center_of_mass(atoms)
+    np.testing.assert_allclose(com, [1.0, 2.0, 3.0], atol=1e-6)
+
+
+def test_translate_to_origin():
+    atoms = Atoms("H2", positions=[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+    centered = translate_to_origin(atoms)
+    com_after = get_center_of_mass(centered)
+    np.testing.assert_allclose(com_after, [0.0, 0.0, 0.0], atol=1e-6)
+
+
+def test_translate_to_origin_no_mutation():
+    atoms = Atoms("H", positions=[[1.0, 2.0, 3.0]])
+    _ = translate_to_origin(atoms)
+    # original must be unchanged
+    np.testing.assert_allclose(atoms.positions[0], [1.0, 2.0, 3.0], atol=1e-6)
+
+
+def test_rotate_molecule_360():
+    """Rotating by 360° should return to original positions."""
+    atoms = Atoms("H2O", positions=[[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]])
+    rotated = rotate_molecule(atoms, [0, 0, 1], 360.0)
+    np.testing.assert_allclose(rotated.positions, atoms.positions, atol=1e-6)
+
+
+def test_rotate_molecule_90_z():
+    """Rotating a two-atom molecule by 90° around z should move atoms correctly."""
+    # Two atoms: H at (-1,0,0) and H at (1,0,0); COM is at (0,0,0).
+    # After 90° z rotation: (-1,0,0) -> (0,-1,0), (1,0,0) -> (0,1,0)
+    atoms = Atoms("H2", positions=[[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    rotated = rotate_molecule(atoms, [0, 0, 1], 90.0)
+    np.testing.assert_allclose(rotated.positions[0], [0.0, -1.0, 0.0], atol=1e-6)
+    np.testing.assert_allclose(rotated.positions[1], [0.0, 1.0, 0.0], atol=1e-6)
+
+
+def test_rotate_molecule_zero_axis_raises():
+    atoms = Atoms("H", positions=[[0.0, 0.0, 0.0]])
+    with pytest.raises(ValueError):
+        rotate_molecule(atoms, [0.0, 0.0, 0.0], 45.0)

@@ -24,6 +24,9 @@ from geometry_tools import (
     detect_fragment,
     set_bond_angle_fragment,
     set_dihedral_fragment,
+    get_center_of_mass,
+    translate_to_origin,
+    rotate_molecule,
 )
 
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
@@ -358,6 +361,53 @@ def change_dihedral_angle_fragment(
         f"{old_d:.2f}° → {new_dihedral_deg:.2f}° "
         f"(rotated fragment: {fragment})\n\n{atoms_to_xyz(atoms)}"
     )
+
+
+# ─────────────────────────────────────────────
+# Tool: center of mass / translate / rotate whole molecule
+# ─────────────────────────────────────────────
+
+@mcp.tool()
+def get_molecule_center_of_mass() -> str:
+    """
+    Return the center of mass of the current molecule.
+    Returns:
+        Center of mass coordinates in Angstroms.
+    """
+    atoms = _require_atoms()
+    com = get_center_of_mass(atoms)
+    return f"Center of mass: ({com[0]:.6f}, {com[1]:.6f}, {com[2]:.6f}) Å"
+
+
+@mcp.tool()
+def center_molecule_at_origin() -> str:
+    """
+    Translate the molecule so its center of mass is at the origin.
+    Returns:
+        Updated molecule in XYZ format.
+    """
+    global _current_atoms
+    atoms = translate_to_origin(_require_atoms())
+    _current_atoms = atoms
+    return f"Centered molecule at origin.\n\n{atoms_to_xyz(atoms)}"
+
+
+@mcp.tool()
+def rotate_whole_molecule(axis_x: float, axis_y: float, axis_z: float, angle_deg: float) -> str:
+    """
+    Rotate the entire molecule around the given axis (through the center of mass) by angle_deg degrees.
+
+    Args:
+        axis_x, axis_y, axis_z: components of the rotation axis vector
+        angle_deg: rotation angle in degrees
+
+    Returns:
+        Updated molecule in XYZ format.
+    """
+    global _current_atoms
+    atoms = rotate_molecule(_require_atoms(), [axis_x, axis_y, axis_z], angle_deg)
+    _current_atoms = atoms
+    return f"Rotated molecule by {angle_deg:.2f}° around axis ({axis_x:.3f}, {axis_y:.3f}, {axis_z:.3f}).\n\n{atoms_to_xyz(atoms)}"
 
 
 # ─────────────────────────────────────────────
