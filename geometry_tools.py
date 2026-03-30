@@ -62,8 +62,7 @@ def move_group(atoms: Atoms, atom_indices: list[int], displacement: list[float])
             raise ValueError(f"atom_index {idx} out of range [0, {n})")
     result = atoms.copy()
     disp = np.array(displacement, dtype=float)
-    for idx in atom_indices:
-        result.positions[idx] += disp
+    result.positions[atom_indices] += disp
     logger.info("Moved group %s by %s", atom_indices, displacement)
     return result
 
@@ -218,7 +217,11 @@ def get_bond_angle(atoms: Atoms, atom_i: int, atom_j: int, atom_k: int) -> float
     pos_k = atoms.positions[atom_k]
     vec_ji = pos_i - pos_j
     vec_jk = pos_k - pos_j
-    cos_a = np.dot(vec_ji, vec_jk) / (np.linalg.norm(vec_ji) * np.linalg.norm(vec_jk))
+    norm_ji = np.linalg.norm(vec_ji)
+    norm_jk = np.linalg.norm(vec_jk)
+    if norm_ji < 1e-10 or norm_jk < 1e-10:
+        raise ValueError(f"Degenerate bond vectors for angle {atom_i}-{atom_j}-{atom_k}")
+    cos_a = np.dot(vec_ji, vec_jk) / (norm_ji * norm_jk)
     return float(np.degrees(np.arccos(np.clip(cos_a, -1.0, 1.0))))
 
 
@@ -231,11 +234,18 @@ def get_dihedral(atoms: Atoms, atom_i: int, atom_j: int, atom_k: int, atom_l: in
     b1 = pos_j - pos_i
     b2 = pos_k - pos_j
     b3 = pos_l - pos_k
-    b2_n = b2 / np.linalg.norm(b2)
+    b2_norm = np.linalg.norm(b2)
+    if b2_norm < 1e-10:
+        raise ValueError(f"Atoms {atom_j} and {atom_k} are at the same position")
+    b2_n = b2 / b2_norm
     n1 = np.cross(b1, b2)
     n2 = np.cross(b2, b3)
-    n1 /= np.linalg.norm(n1)
-    n2 /= np.linalg.norm(n2)
+    n1_norm = np.linalg.norm(n1)
+    n2_norm = np.linalg.norm(n2)
+    if n1_norm < 1e-10 or n2_norm < 1e-10:
+        raise ValueError("Degenerate dihedral (collinear atoms)")
+    n1 = n1 / n1_norm
+    n2 = n2 / n2_norm
     cos_d = np.clip(np.dot(n1, n2), -1.0, 1.0)
     sin_d = np.dot(np.cross(n1, n2), b2_n)
     return float(np.degrees(np.arctan2(sin_d, cos_d)))

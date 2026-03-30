@@ -10,7 +10,6 @@ Each test:
 import json
 import logging
 import os
-import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -21,8 +20,6 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import AsyncOpenAI
 
-# Make project root importable
-sys.path.insert(0, str(Path(__file__).parent.parent))
 from geometry_tools import atoms_from_xyz, get_bond_length, get_bond_angle, get_dihedral
 from mcp_utils import mcp_tool_to_openai
 
