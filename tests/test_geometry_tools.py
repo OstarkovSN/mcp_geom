@@ -148,6 +148,16 @@ def test_set_bond_length_does_not_mutate(ethane):
     np.testing.assert_allclose(ethane.positions, original)
 
 
+def test_set_bond_length_negative_raises(ethane):
+    with pytest.raises(ValueError, match="positive"):
+        set_bond_length(ethane, 0, 1, -1.0)
+
+
+def test_set_bond_length_zero_raises(ethane):
+    with pytest.raises(ValueError, match="positive"):
+        set_bond_length(ethane, 0, 1, 0.0)
+
+
 # ─────────────────────────────────────────────
 # set_bond_angle / get_bond_angle
 # ─────────────────────────────────────────────
@@ -156,6 +166,15 @@ def test_get_bond_angle_water(water):
     # H-O-H angle in water ~104° (depends on the coordinate set used)
     angle = get_bond_angle(water, 1, 0, 2)
     assert 95.0 < angle < 115.0
+
+
+def test_get_bond_angle_degenerate_raises(water):
+    """get_bond_angle must raise when two atoms coincide (zero-length vector)."""
+    from ase import Atoms
+    # Place three atoms where two are at the same position
+    coincident = Atoms("HOH", positions=[[0, 0, 0], [0, 0, 0], [1, 0, 0]])
+    with pytest.raises(ValueError, match="Degenerate"):
+        get_bond_angle(coincident, 0, 1, 2)
 
 
 def test_set_bond_angle(water):
@@ -219,6 +238,21 @@ def test_set_dihedral_180(ethane):
     result = set_dihedral(ethane, 2, 0, 1, 5, 180.0)
     measured = get_dihedral(result, 2, 0, 1, 5)
     assert abs(abs(measured) - 180.0) < 1e-4
+
+
+def test_get_dihedral_degenerate_raises(ethane):
+    """get_dihedral must raise when j and k coincide (zero-length b2 vector)."""
+    from ase import Atoms
+    collinear = Atoms("CCCC", positions=[[0, 0, 0], [1, 0, 0], [1, 0, 0], [2, 0, 0]])
+    with pytest.raises(ValueError):
+        get_dihedral(collinear, 0, 1, 2, 3)
+
+
+def test_set_dihedral_negative_90(ethane):
+    """set_dihedral should work for negative target angles."""
+    result = set_dihedral(ethane, 2, 0, 1, 5, -90.0)
+    measured = get_dihedral(result, 2, 0, 1, 5)
+    assert abs(measured - (-90.0)) < 1e-4
 
 
 # ─────────────────────────────────────────────

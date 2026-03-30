@@ -285,12 +285,13 @@ def detect_fragment(atoms: Atoms, atom_j: int, atom_k: int, start_atom: int) -> 
     max_radius = radii.max()
     uniform_cutoff = 1.2 * 2 * max_radius
 
-    i_idx, j_idx = neighbor_list('ij', atoms, uniform_cutoff)
+    # Request distances 'd' from neighbor_list to avoid recomputing norms per pair
+    i_idx, j_idx, dists = neighbor_list('ijd', atoms, uniform_cutoff)
 
     # Build adjacency, keeping only pairs within their specific per-pair cutoff
     adjacency: dict[int, list[int]] = {i: [] for i in range(n)}
-    for ii, jj in zip(i_idx, j_idx):
-        if np.linalg.norm(atoms.positions[ii] - atoms.positions[jj]) <= 1.2 * (radii[ii] + radii[jj]):
+    for ii, jj, dist in zip(i_idx, j_idx, dists):
+        if dist <= 1.2 * (radii[ii] + radii[jj]):
             adjacency[ii].append(jj)
 
     # BFS from start_atom, not crossing the j-k bond in either direction
