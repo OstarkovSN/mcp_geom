@@ -22,6 +22,7 @@ from geometry_tools import (
     get_bond_angle,
     get_dihedral,
     detect_fragment,
+    set_bond_angle_fragment,
     set_dihedral_fragment,
 )
 
@@ -226,6 +227,46 @@ def change_bond_angle(atom_i: int, atom_j: int, atom_k: int, new_angle_deg: floa
     return (
         f"Angle {atom_i}({syms[atom_i]})-{atom_j}({syms[atom_j]})-{atom_k}({syms[atom_k]}): "
         f"{old_angle:.2f}° → {new_angle_deg:.2f}°\n\n{atoms_to_xyz(atoms)}"
+    )
+
+
+# ─────────────────────────────────────────────
+# Tool: fragment-aware bond angle
+# ─────────────────────────────────────────────
+
+@mcp.tool()
+def change_bond_angle_fragment(
+    atom_i: int, atom_j: int, atom_k: int, new_angle_deg: float
+) -> str:
+    """
+    Set the bond angle i-j-k (vertex at j) to new_angle_deg degrees by rotating the ENTIRE
+    fragment on the atom_k side of the j-k bond. This preserves the internal geometry
+    of that fragment (all atoms move together rigidly).
+
+    The fragment is auto-detected: all atoms reachable from atom_k without crossing
+    the j-k bond.
+
+    Args:
+        atom_i: index of first atom
+        atom_j: index of the vertex atom (stays fixed)
+        atom_k: index of the atom on the side to rotate
+        new_angle_deg: desired angle in degrees
+
+    Returns:
+        Updated molecule in XYZ format.
+    """
+    global _current_atoms
+    old_atoms = _require_atoms()
+    old_angle = get_bond_angle(old_atoms, atom_i, atom_j, atom_k)
+    fragment = detect_fragment(old_atoms, atom_j, atom_k, atom_k)
+    atoms = set_bond_angle_fragment(old_atoms, atom_i, atom_j, atom_k, new_angle_deg, fragment)
+    _current_atoms = atoms
+    syms = atoms.get_chemical_symbols()
+    return (
+        f"Angle (fragment) {atom_i}({syms[atom_i]})-{atom_j}({syms[atom_j]})-"
+        f"{atom_k}({syms[atom_k]}): "
+        f"{old_angle:.2f}° → {new_angle_deg:.2f}° "
+        f"(rotated fragment: {fragment})\n\n{atoms_to_xyz(atoms)}"
     )
 
 

@@ -12,6 +12,7 @@ from geometry_tools import (
     move_group,
     set_bond_length,
     set_bond_angle,
+    set_bond_angle_fragment,
     set_dihedral,
     get_bond_length,
     get_bond_angle,
@@ -347,4 +348,48 @@ def test_set_dihedral_fragment_does_not_mutate(ethane):
     original = ethane.positions.copy()
     fragment = detect_fragment(ethane, 0, 1, 1)
     set_dihedral_fragment(ethane, 2, 0, 1, 5, 60.0, fragment)
+    np.testing.assert_allclose(ethane.positions, original)
+
+
+# ─────────────────────────────────────────────
+# set_bond_angle_fragment
+# ─────────────────────────────────────────────
+
+def test_set_bond_angle_fragment_ethane(ethane):
+    """Set angle 2-0-1 to 115°, verify within 0.1°."""
+    fragment = detect_fragment(ethane, 0, 1, 1)
+    target = 115.0
+    result = set_bond_angle_fragment(ethane, 2, 0, 1, target, fragment)
+    measured = get_bond_angle(result, 2, 0, 1)
+    assert abs(measured - target) < 0.1, f"Expected {target}°, got {measured:.4f}°"
+
+
+def test_set_bond_angle_fragment_preserves_cc_bond(ethane):
+    """C-C bond must not change after fragment angle rotation."""
+    fragment = detect_fragment(ethane, 0, 1, 1)
+    original_cc = get_bond_length(ethane, 0, 1)
+    result = set_bond_angle_fragment(ethane, 2, 0, 1, 115.0, fragment)
+    new_cc = get_bond_length(result, 0, 1)
+    assert abs(new_cc - original_cc) < 1e-6, f"C-C bond changed: {original_cc:.6f} → {new_cc:.6f}"
+
+
+def test_set_bond_angle_fragment_rigid_rotation(ethane):
+    """All fragment atoms move together: relative inter-fragment distances preserved."""
+    fragment = detect_fragment(ethane, 0, 1, 1)
+    result = set_bond_angle_fragment(ethane, 2, 0, 1, 115.0, fragment)
+    for a in fragment:
+        for b in fragment:
+            orig_dist = np.linalg.norm(ethane.positions[a] - ethane.positions[b])
+            new_dist = np.linalg.norm(result.positions[a] - result.positions[b])
+            assert abs(new_dist - orig_dist) < 1e-6, (
+                f"Relative distance between fragment atoms {a}-{b} changed: "
+                f"{orig_dist:.6f} → {new_dist:.6f}"
+            )
+
+
+def test_set_bond_angle_fragment_does_not_mutate(ethane):
+    """Input atoms object must not be modified."""
+    original = ethane.positions.copy()
+    fragment = detect_fragment(ethane, 0, 1, 1)
+    set_bond_angle_fragment(ethane, 2, 0, 1, 115.0, fragment)
     np.testing.assert_allclose(ethane.positions, original)

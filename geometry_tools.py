@@ -357,6 +357,70 @@ def rotate_dihedral_fragment(
     return result
 
 
+def set_bond_angle_fragment(
+    atoms: Atoms,
+    atom_i: int,
+    atom_j: int,
+    atom_k: int,
+    new_angle_deg: float,
+    fragment_indices: list[int],
+) -> Atoms:
+    """
+    Set the bond angle i-j-k (vertex at j) to new_angle_deg by rotating ALL atoms in
+    fragment_indices rigidly around the axis perpendicular to the i-j-k plane, pivoting
+    at atom_j. fragment_indices should be all atoms on the atom_k side of the j-k bond.
+
+    Args:
+        atoms: ASE Atoms object
+        atom_i, atom_j, atom_k: atom indices defining the angle (vertex at j)
+        new_angle_deg: desired angle in degrees
+        fragment_indices: indices of atoms to rotate together
+
+    Returns:
+        New Atoms object with adjusted angle.
+    """
+    result = atoms.copy()
+    pos_i = result.positions[atom_i]
+    pos_j = result.positions[atom_j]
+    pos_k = result.positions[atom_k]
+
+    vec_ji = pos_i - pos_j
+    vec_jk = pos_k - pos_j
+
+    norm_ji = np.linalg.norm(vec_ji)
+    norm_jk = np.linalg.norm(vec_jk)
+    if norm_ji < 1e-10 or norm_jk < 1e-10:
+        raise ValueError(f"Degenerate bond vectors for angle {atom_i}-{atom_j}-{atom_k}")
+
+    vec_ji_n = vec_ji / norm_ji
+    vec_jk_n = vec_jk / norm_jk
+
+    current_angle = get_bond_angle(atoms, atom_i, atom_j, atom_k)
+
+    # Rotation axis: perpendicular to the plane containing i-j-k
+    axis = np.cross(vec_ji_n, vec_jk_n)
+    axis_norm = np.linalg.norm(axis)
+    if axis_norm < 1e-10:
+        # Atoms are collinear; pick arbitrary perpendicular axis
+        perp = np.array([1, 0, 0]) if abs(vec_ji_n[0]) < 0.9 else np.array([0, 1, 0])
+        axis = np.cross(vec_ji_n, perp)
+        axis_norm = np.linalg.norm(axis)
+    axis = axis / axis_norm
+
+    delta_angle = np.radians(new_angle_deg - current_angle)
+
+    for idx in fragment_indices:
+        vec = result.positions[idx] - pos_j
+        rotated = _rodrigues(vec, axis, delta_angle)
+        result.positions[idx] = pos_j + rotated
+
+    logger.info(
+        "Set angle (fragment) %d-%d-%d to %.2f° (was %.2f°), rotated fragment %s",
+        atom_i, atom_j, atom_k, new_angle_deg, current_angle, fragment_indices,
+    )
+    return result
+
+
 def set_dihedral_fragment(
     atoms: Atoms,
     atom_i: int,
