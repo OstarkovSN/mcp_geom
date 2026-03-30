@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import numpy as np
@@ -45,17 +46,19 @@ logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-async def run_agentic_loop(session: ClientSession, client: AsyncOpenAI, openai_tools: list, tool_names: set, prompt: str) -> str:
-    """
-    Send a prompt to LLM, run the agentic loop until no more tool calls,
-    then call get_molecule and return the XYZ string.
-    """
+async def run_agentic_loop(
+    session: ClientSession,
+    client: AsyncOpenAI,
+    openai_tools: list,
+    tool_names: set,
+    prompt: str,
+) -> str:
+    """Send a prompt to LLM, run the agentic loop, return final molecule XYZ."""
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
     ]
 
-    # Agentic loop (max 20 iterations to prevent infinite loops)
     for _ in range(20):
         response = await client.chat.completions.create(
             model=MODEL,
@@ -63,20 +66,16 @@ async def run_agentic_loop(session: ClientSession, client: AsyncOpenAI, openai_t
             tools=openai_tools,
             tool_choice="auto",
         )
-
         msg = response.choices[0].message
         messages.append(msg.model_dump(exclude_none=True))
 
         if not msg.tool_calls:
-            # No more tool calls - done
             logger.info("LLM finished. Final message: %s", msg.content)
             break
 
-        # Execute all tool calls
         for tc in msg.tool_calls:
             fn_name = tc.function.name
             fn_args = json.loads(tc.function.arguments)
-
             if fn_name not in tool_names:
                 tool_result_text = f"Error: unknown tool '{fn_name}'"
             else:
@@ -87,16 +86,24 @@ async def run_agentic_loop(session: ClientSession, client: AsyncOpenAI, openai_t
                 except Exception as exc:
                     tool_result_text = f"Tool error: {exc}"
                 logger.info("Tool result: %s", tool_result_text[:200])
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result_text})
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": tool_result_text,
-            })
-
-    # Get the current molecule state
     result = await session.call_tool("get_molecule", {})
     return result.content[0].text
+
+
+@asynccontextmanager
+async def mcp_test_session(server_params, xyz_string):
+    """Start a fresh MCP server, initialize tools, load molecule, yield test helpers."""
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools_result = await session.list_tools()
+            openai_tools = [mcp_tool_to_openai(t) for t in tools_result.tools]
+            tool_names = {t.name for t in tools_result.tools}
+            client = AsyncOpenAI(base_url=BASE_URL, api_key=API_KEY)
+            await session.call_tool("load_molecule", {"xyz_string": xyz_string})
+            yield session, openai_tools, tool_names, client
 
 
 @pytest.fixture
@@ -116,206 +123,105 @@ def ethane_xyz():
 @pytest.mark.asyncio
 async def test_move_single_atom(server_params, ethane_xyz):
     """Move atom 2 (hydrogen) by 0.5 Angstroms in the x direction and verify."""
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
+    async with mcp_test_session(server_params, ethane_xyz) as (session, openai_tools, tool_names, client):
+        initial_atoms = atoms_from_xyz((await session.call_tool("get_molecule", {})).content[0].text)
+        initial_x = initial_atoms.positions[2][0]
 
-            tools_result = await session.list_tools()
-            openai_tools = [mcp_tool_to_openai(t) for t in tools_result.tools]
-            tool_names = {t.name for t in tools_result.tools}
-            client = AsyncOpenAI(base_url=BASE_URL, api_key=API_KEY)
+        final_xyz = await run_agentic_loop(
+            session, client, openai_tools, tool_names,
+            "Move atom 2 (hydrogen) by 0.5 Angstroms in the x direction."
+        )
 
-            # Load fresh molecule
-            await session.call_tool("load_molecule", {"xyz_string": ethane_xyz})
-
-            # Get initial x position of atom 2
-            initial_result = await session.call_tool("get_molecule", {})
-            initial_atoms = atoms_from_xyz(initial_result.content[0].text)
-            initial_x = initial_atoms.positions[2][0]
-
-            # Run the agentic loop
-            final_xyz = await run_agentic_loop(
-                session, client, openai_tools, tool_names,
-                "Move atom 2 (hydrogen) by 0.5 Angstroms in the x direction."
-            )
-
-            # Verify
-            final_atoms = atoms_from_xyz(final_xyz)
-            final_x = final_atoms.positions[2][0]
-            delta_x = final_x - initial_x
-
-            logger.info("Atom 2 x: %.4f -> %.4f (delta=%.4f)", initial_x, final_x, delta_x)
-            assert abs(delta_x - 0.5) < 0.05, (
-                f"Expected atom 2 x to increase by ~0.5, got delta={delta_x:.4f}"
-            )
+        delta_x = atoms_from_xyz(final_xyz).positions[2][0] - initial_x
+        logger.info("Atom 2 x delta: %.4f", delta_x)
+        assert abs(delta_x - 0.5) < 0.05, f"Expected delta ~0.5, got {delta_x:.4f}"
 
 
 @pytest.mark.asyncio
 async def test_move_atom_group(server_params, ethane_xyz):
     """Move atoms 1, 5, 6, 7 (second carbon and its hydrogens) by 1.0 Å in y and verify."""
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
+    async with mcp_test_session(server_params, ethane_xyz) as (session, openai_tools, tool_names, client):
+        initial_atoms = atoms_from_xyz((await session.call_tool("get_molecule", {})).content[0].text)
+        initial_ys = {idx: initial_atoms.positions[idx][1] for idx in [1, 5, 6, 7]}
 
-            tools_result = await session.list_tools()
-            openai_tools = [mcp_tool_to_openai(t) for t in tools_result.tools]
-            tool_names = {t.name for t in tools_result.tools}
-            client = AsyncOpenAI(base_url=BASE_URL, api_key=API_KEY)
+        final_xyz = await run_agentic_loop(
+            session, client, openai_tools, tool_names,
+            "Move atoms 1, 5, 6, 7 (the second carbon and its hydrogens) by 1.0 Angstrom in the y direction."
+        )
 
-            # Load fresh molecule
-            await session.call_tool("load_molecule", {"xyz_string": ethane_xyz})
-
-            # Get initial y positions
-            initial_result = await session.call_tool("get_molecule", {})
-            initial_atoms = atoms_from_xyz(initial_result.content[0].text)
-            initial_ys = {idx: initial_atoms.positions[idx][1] for idx in [1, 5, 6, 7]}
-
-            # Run the agentic loop
-            final_xyz = await run_agentic_loop(
-                session, client, openai_tools, tool_names,
-                "Move atoms 1, 5, 6, 7 (the second carbon and its hydrogens) by 1.0 Angstrom in the y direction."
-            )
-
-            # Verify
-            final_atoms = atoms_from_xyz(final_xyz)
-            for idx in [1, 5, 6, 7]:
-                delta_y = final_atoms.positions[idx][1] - initial_ys[idx]
-                logger.info("Atom %d y delta: %.4f", idx, delta_y)
-                assert abs(delta_y - 1.0) < 0.05, (
-                    f"Expected atom {idx} y to increase by ~1.0, got delta={delta_y:.4f}"
-                )
+        final_atoms = atoms_from_xyz(final_xyz)
+        for idx in [1, 5, 6, 7]:
+            delta_y = final_atoms.positions[idx][1] - initial_ys[idx]
+            logger.info("Atom %d y delta: %.4f", idx, delta_y)
+            assert abs(delta_y - 1.0) < 0.05, f"Expected atom {idx} y delta ~1.0, got {delta_y:.4f}"
 
 
 @pytest.mark.asyncio
 async def test_change_bond_length(server_params, ethane_xyz):
     """Set C-C bond length (atoms 0 and 1) to 1.65 Å and verify."""
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
+    async with mcp_test_session(server_params, ethane_xyz) as (session, openai_tools, tool_names, client):
+        final_xyz = await run_agentic_loop(
+            session, client, openai_tools, tool_names,
+            "Set the C-C bond length (atoms 0 and 1) to 1.65 Angstroms."
+        )
 
-            tools_result = await session.list_tools()
-            openai_tools = [mcp_tool_to_openai(t) for t in tools_result.tools]
-            tool_names = {t.name for t in tools_result.tools}
-            client = AsyncOpenAI(base_url=BASE_URL, api_key=API_KEY)
-
-            # Load fresh molecule
-            await session.call_tool("load_molecule", {"xyz_string": ethane_xyz})
-
-            # Run the agentic loop
-            final_xyz = await run_agentic_loop(
-                session, client, openai_tools, tool_names,
-                "Set the C-C bond length (atoms 0 and 1) to 1.65 Angstroms."
-            )
-
-            # Verify
-            final_atoms = atoms_from_xyz(final_xyz)
-            bond_len = get_bond_length(final_atoms, 0, 1)
-            logger.info("C-C bond length after: %.4f Å", bond_len)
-            assert abs(bond_len - 1.65) < 0.01, (
-                f"Expected C-C bond length ~1.65 Å, got {bond_len:.4f} Å"
-            )
+        bond_len = get_bond_length(atoms_from_xyz(final_xyz), 0, 1)
+        logger.info("C-C bond length after: %.4f Å", bond_len)
+        assert abs(bond_len - 1.65) < 0.01, f"Expected ~1.65 Å, got {bond_len:.4f} Å"
 
 
 @pytest.mark.asyncio
 async def test_change_bond_angle(server_params, ethane_xyz):
     """Change H-C-C angle (atoms 2, 0, 1) to 115 degrees and verify."""
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
+    async with mcp_test_session(server_params, ethane_xyz) as (session, openai_tools, tool_names, client):
+        final_xyz = await run_agentic_loop(
+            session, client, openai_tools, tool_names,
+            "Change the H-C-C angle (atoms 2, 0, 1) to 115 degrees."
+        )
 
-            tools_result = await session.list_tools()
-            openai_tools = [mcp_tool_to_openai(t) for t in tools_result.tools]
-            tool_names = {t.name for t in tools_result.tools}
-            client = AsyncOpenAI(base_url=BASE_URL, api_key=API_KEY)
-
-            # Load fresh molecule
-            await session.call_tool("load_molecule", {"xyz_string": ethane_xyz})
-
-            # Run the agentic loop
-            final_xyz = await run_agentic_loop(
-                session, client, openai_tools, tool_names,
-                "Change the H-C-C angle (atoms 2, 0, 1) to 115 degrees."
-            )
-
-            # Verify: angle is i-j-k with vertex at j
-            # Prompt says atoms 2, 0, 1 -> i=2, j=0, k=1
-            final_atoms = atoms_from_xyz(final_xyz)
-            angle = get_bond_angle(final_atoms, 2, 0, 1)
-            logger.info("H-C-C angle after: %.4f degrees", angle)
-            assert abs(angle - 115.0) < 0.5, (
-                f"Expected H-C-C angle ~115°, got {angle:.4f}°"
-            )
+        angle = get_bond_angle(atoms_from_xyz(final_xyz), 2, 0, 1)
+        logger.info("H-C-C angle after: %.4f°", angle)
+        assert abs(angle - 115.0) < 0.5, f"Expected ~115°, got {angle:.4f}°"
 
 
 @pytest.mark.asyncio
 async def test_change_dihedral_angle(server_params, ethane_xyz):
     """Set dihedral H-C-C-H (atoms 2, 0, 1, 5) to 60 degrees and verify."""
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
+    async with mcp_test_session(server_params, ethane_xyz) as (session, openai_tools, tool_names, client):
+        final_xyz = await run_agentic_loop(
+            session, client, openai_tools, tool_names,
+            "Set the dihedral H-C-C-H (atoms 2, 0, 1, 5) to 60 degrees."
+        )
 
-            tools_result = await session.list_tools()
-            openai_tools = [mcp_tool_to_openai(t) for t in tools_result.tools]
-            tool_names = {t.name for t in tools_result.tools}
-            client = AsyncOpenAI(base_url=BASE_URL, api_key=API_KEY)
-
-            # Load fresh molecule
-            await session.call_tool("load_molecule", {"xyz_string": ethane_xyz})
-
-            # Run the agentic loop
-            final_xyz = await run_agentic_loop(
-                session, client, openai_tools, tool_names,
-                "Set the dihedral H-C-C-H (atoms 2, 0, 1, 5) to 60 degrees."
-            )
-
-            # Verify
-            final_atoms = atoms_from_xyz(final_xyz)
-            dihedral = get_dihedral(final_atoms, 2, 0, 1, 5)
-            logger.info("H-C-C-H dihedral after: %.4f degrees", dihedral)
-            assert abs(dihedral - 60.0) < 1.0, (
-                f"Expected dihedral ~60°, got {dihedral:.4f}°"
-            )
+        dihedral = get_dihedral(atoms_from_xyz(final_xyz), 2, 0, 1, 5)
+        logger.info("H-C-C-H dihedral after: %.4f°", dihedral)
+        assert abs(dihedral - 60.0) < 1.0, f"Expected ~60°, got {dihedral:.4f}°"
 
 
 @pytest.mark.asyncio
 async def test_change_dihedral_fragment(server_params, ethane_xyz):
-    """Rotate the whole CH3 fragment by setting dihedral via change_dihedral_angle_fragment,
-    verify dihedral is correct AND the internal fragment geometry is preserved."""
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
+    """Rotate the whole CH3 fragment via change_dihedral_angle_fragment,
+    verify dihedral is correct AND internal fragment geometry is preserved."""
+    async with mcp_test_session(server_params, ethane_xyz) as (session, openai_tools, tool_names, client):
+        initial_atoms = atoms_from_xyz((await session.call_tool("get_molecule", {})).content[0].text)
+        frag = [1, 5, 6, 7]
+        initial_dists = {
+            (a, b): float(np.linalg.norm(initial_atoms.positions[a] - initial_atoms.positions[b]))
+            for a in frag for b in frag if a < b
+        }
 
-            tools_result = await session.list_tools()
-            openai_tools = [mcp_tool_to_openai(t) for t in tools_result.tools]
-            tool_names = {t.name for t in tools_result.tools}
-            client = AsyncOpenAI(base_url=BASE_URL, api_key=API_KEY)
+        final_xyz = await run_agentic_loop(
+            session, client, openai_tools, tool_names,
+            "Use the fragment dihedral tool to set the dihedral H-C-C-H "
+            "(atoms 2, 0, 1, 5) to 180 degrees, rotating the entire CH3 group."
+        )
 
-            await session.call_tool("load_molecule", {"xyz_string": ethane_xyz})
+        final_atoms = atoms_from_xyz(final_xyz)
+        dihedral = get_dihedral(final_atoms, 2, 0, 1, 5)
+        assert abs(abs(dihedral) - 180.0) < 1.0, f"Expected ~180°, got {dihedral:.4f}°"
 
-            # Record initial intra-fragment distances (atoms 1, 5, 6, 7)
-            initial_result = await session.call_tool("get_molecule", {})
-            initial_atoms = atoms_from_xyz(initial_result.content[0].text)
-            frag = [1, 5, 6, 7]
-            initial_dists = {
-                (a, b): float(np.linalg.norm(initial_atoms.positions[a] - initial_atoms.positions[b]))
-                for a in frag for b in frag if a < b
-            }
-
-            final_xyz = await run_agentic_loop(
-                session, client, openai_tools, tool_names,
-                "Use the fragment dihedral tool to set the dihedral H-C-C-H "
-                "(atoms 2, 0, 1, 5) to 180 degrees, rotating the entire CH3 group."
+        for (a, b), orig_dist in initial_dists.items():
+            new_dist = float(np.linalg.norm(final_atoms.positions[a] - final_atoms.positions[b]))
+            assert abs(new_dist - orig_dist) < 0.01, (
+                f"Fragment distance {a}-{b} changed: {orig_dist:.4f} → {new_dist:.4f}"
             )
-
-            final_atoms = atoms_from_xyz(final_xyz)
-
-            # Dihedral should be ~180°
-            dihedral = get_dihedral(final_atoms, 2, 0, 1, 5)
-            assert abs(abs(dihedral) - 180.0) < 1.0, f"Expected ~180°, got {dihedral:.4f}°"
-
-            # Intra-fragment distances must be preserved (rigid rotation)
-            for (a, b), orig_dist in initial_dists.items():
-                new_dist = float(np.linalg.norm(final_atoms.positions[a] - final_atoms.positions[b]))
-                assert abs(new_dist - orig_dist) < 0.01, (
-                    f"Fragment internal distance {a}-{b} changed: {orig_dist:.4f} → {new_dist:.4f}"
-                )
