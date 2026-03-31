@@ -133,3 +133,7 @@ chat_app.py  ──stdio──►  mcp_server.py
 ```
 
 The MCP server holds the molecule in memory between tool calls. The chat app bridges LLM function calls to MCP tool calls — the XYZ coordinates are not re-sent with every message.
+
+### Per-client state
+
+The molecule is stored as a single global variable in the server process. There is no per-session isolation — multiple clients connecting to the same server instance would share and overwrite each other's molecule. In practice this is not an issue because each client (chat app, test) spawns its own server subprocess, giving it a completely independent process with its own memory.
