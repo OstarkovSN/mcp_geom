@@ -24,7 +24,6 @@ from geometry_tools import (
     detect_fragment,
     set_bond_angle_fragment,
     set_dihedral_fragment,
-    get_center_of_mass,
     translate_to_origin,
     rotate_molecule,
 )
@@ -375,7 +374,7 @@ def get_molecule_center_of_mass() -> str:
         Center of mass coordinates in Angstroms.
     """
     atoms = _require_atoms()
-    com = get_center_of_mass(atoms)
+    com = atoms.get_center_of_mass()
     return f"Center of mass: ({com[0]:.6f}, {com[1]:.6f}, {com[2]:.6f}) Å"
 
 

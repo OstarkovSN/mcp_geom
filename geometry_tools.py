@@ -252,10 +252,13 @@ def get_dihedral(atoms: Atoms, atom_i: int, atom_j: int, atom_k: int, atom_l: in
 
 
 def _rodrigues(v: np.ndarray, axis: np.ndarray, angle_rad: float) -> np.ndarray:
-    """Rotate vector v by angle_rad radians around unit axis using Rodrigues' formula."""
+    """Rotate vector(s) v by angle_rad radians around unit axis using Rodrigues' formula.
+    v may be shape (3,) for a single vector or (N, 3) for a batch."""
     cos_a = np.cos(angle_rad)
     sin_a = np.sin(angle_rad)
-    return v * cos_a + np.cross(axis, v) * sin_a + axis * np.dot(axis, v) * (1 - cos_a)
+    # v @ axis: scalar for (3,), shape (N,) for (N,3) — expand for broadcasting
+    dot = v @ axis
+    return v * cos_a + np.cross(axis, v) * sin_a + axis * (dot * (1 - cos_a))[..., np.newaxis]
 
 
 def detect_fragment(atoms: Atoms, atom_j: int, atom_k: int, start_atom: int) -> list[int]:
@@ -288,11 +291,12 @@ def detect_fragment(atoms: Atoms, atom_j: int, atom_k: int, start_atom: int) -> 
     # Request distances 'd' from neighbor_list to avoid recomputing norms per pair
     i_idx, j_idx, dists = neighbor_list('ijd', atoms, uniform_cutoff)
 
-    # Build adjacency, keeping only pairs within their specific per-pair cutoff
+    # Build adjacency, keeping only pairs within their specific per-pair cutoff (vectorized)
+    valid = dists <= 1.2 * (radii[i_idx] + radii[j_idx])
+    src, dst = i_idx[valid], j_idx[valid]
     adjacency: dict[int, list[int]] = {i: [] for i in range(n)}
-    for ii, jj, dist in zip(i_idx, j_idx, dists):
-        if dist <= 1.2 * (radii[ii] + radii[jj]):
-            adjacency[ii].append(jj)
+    for ii, jj in zip(src, dst):
+        adjacency[ii].append(jj)
 
     # BFS from start_atom, not crossing the j-k bond in either direction
     visited = set()
@@ -344,11 +348,8 @@ def rotate_dihedral_fragment(
         raise ValueError(f"Atoms {atom_j} and {atom_k} are at the same position")
     axis = axis / axis_norm
 
-    delta_rad = np.radians(delta_deg)
-    for idx in fragment_indices:
-        vec = result.positions[idx] - pos_k
-        rotated = _rodrigues(vec, axis, delta_rad)
-        result.positions[idx] = pos_k + rotated
+    vecs = result.positions[fragment_indices] - pos_k
+    result.positions[fragment_indices] = pos_k + _rodrigues(vecs, axis, np.radians(delta_deg))
 
     logger.info(
         "Rotated fragment %s around bond %d-%d by %.2f°",
@@ -407,12 +408,8 @@ def set_bond_angle_fragment(
         axis_norm = np.linalg.norm(axis)
     axis = axis / axis_norm
 
-    delta_angle = np.radians(new_angle_deg - current_angle)
-
-    for idx in fragment_indices:
-        vec = result.positions[idx] - pos_j
-        rotated = _rodrigues(vec, axis, delta_angle)
-        result.positions[idx] = pos_j + rotated
+    vecs = result.positions[fragment_indices] - pos_j
+    result.positions[fragment_indices] = pos_j + _rodrigues(vecs, axis, np.radians(new_angle_deg - current_angle))
 
     logger.info(
         "Set angle (fragment) %d-%d-%d to %.2f° (was %.2f°), rotated fragment %s",
@@ -455,19 +452,6 @@ def set_dihedral_fragment(
     return result
 
 
-def get_center_of_mass(atoms: Atoms) -> np.ndarray:
-    """
-    Return the center of mass of the molecule as a numpy array.
-
-    Args:
-        atoms: ASE Atoms object
-
-    Returns:
-        Center of mass coordinates as np.ndarray of shape (3,) in Angstroms.
-    """
-    return atoms.get_center_of_mass()
-
-
 def translate_to_origin(atoms: Atoms) -> Atoms:
     """
     Return a new Atoms object with the center of mass moved to the origin.
@@ -479,7 +463,7 @@ def translate_to_origin(atoms: Atoms) -> Atoms:
         New Atoms object centered at [0, 0, 0].
     """
     result = atoms.copy()
-    result.positions -= get_center_of_mass(atoms)
+    result.positions -= atoms.get_center_of_mass()
     return result
 
 
@@ -495,16 +479,10 @@ def rotate_molecule(atoms: Atoms, axis: list[float], angle_deg: float) -> Atoms:
     Returns:
         New Atoms object with all atoms rotated.
     """
-    result = atoms.copy()
-    com = get_center_of_mass(atoms)
     ax = np.array(axis, dtype=float)
-    ax_norm = np.linalg.norm(ax)
-    if ax_norm < 1e-10:
+    if np.linalg.norm(ax) < 1e-10:
         raise ValueError("Rotation axis cannot be the zero vector")
-    ax = ax / ax_norm
-    angle_rad = np.radians(angle_deg)
-    for i in range(len(result)):
-        vec = result.positions[i] - com
-        result.positions[i] = com + _rodrigues(vec, ax, angle_rad)
+    result = atoms.copy()
+    result.rotate(angle_deg, ax, center='COM')
     logger.info("Rotated molecule by %.2f° around axis %s", angle_deg, axis)
     return result

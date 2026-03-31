@@ -20,7 +20,6 @@ from geometry_tools import (
     detect_fragment,
     rotate_dihedral_fragment,
     set_dihedral_fragment,
-    get_center_of_mass,
     translate_to_origin,
     rotate_molecule,
 )
@@ -404,15 +403,13 @@ def test_set_bond_angle_fragment_does_not_mutate(ethane):
 
 def test_get_center_of_mass_single_atom():
     atoms = Atoms("H", positions=[[1.0, 2.0, 3.0]])
-    com = get_center_of_mass(atoms)
-    np.testing.assert_allclose(com, [1.0, 2.0, 3.0], atol=1e-6)
+    np.testing.assert_allclose(atoms.get_center_of_mass(), [1.0, 2.0, 3.0], atol=1e-6)
 
 
 def test_translate_to_origin():
     atoms = Atoms("H2", positions=[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
     centered = translate_to_origin(atoms)
-    com_after = get_center_of_mass(centered)
-    np.testing.assert_allclose(com_after, [0.0, 0.0, 0.0], atol=1e-6)
+    np.testing.assert_allclose(centered.get_center_of_mass(), [0.0, 0.0, 0.0], atol=1e-6)
 
 
 def test_translate_to_origin_no_mutation():
